@@ -7,7 +7,7 @@ source ~/.profile 2>/dev/null
 # 设置代理
 export http_proxy="http://127.0.0.1:7890"
 export https_proxy="http://127.0.0.1:7890"
-
+source ~/venv/bin/activate
 # 检查参数
 if [ $# -eq 0 ]; then
     echo "Usage: $0 <domain>"
@@ -32,7 +32,7 @@ run_cmd() {
     # 特殊处理kiterunner
     if [[ "$1" == "kiterunner" ]]; then
         /bin/bash -c "${2}"
-        [ -f "$OUTPUT_DIR/kr_out.txt" ] && cat "$OUTPUT_DIR/kr_out.txt" >> "$OUTPUT_DIR/${1}_out.txt"
+        [ -f "$OUTPUT_DIR/kiterunner_out.txt" ] && cat "$OUTPUT_DIR/kiterunner_out.txt" >> "$OUTPUT_DIR/${1}_out.txt"
     else
         /bin/bash -c "${2}" > "$OUTPUT_DIR/${1}_out.txt" 2>&1
     fi
@@ -54,13 +54,42 @@ run_cmd "gospider" "gospider -s http://$DOMAIN -c 50 -d 2 | grep -E '\[(code|hre
 run_cmd "gau" "gau --proxy http://127.0.0.1:7890 $DOMAIN"
 run_cmd "waybackurls" "waybackurls $DOMAIN"
 run_cmd "paramspider" "paramspider -d $DOMAIN --proxy 127.0.0.1:7890 && { [ -d results ] && cat results/* > $OUTPUT_DIR/paramspider_out.txt; rm -rf results; }"
-run_cmd "kiterunner" "kr scan $DOMAIN -w /root/tools/kiterunner/routes-small.kite -x 5 -j 100 -o $OUTPUT_DIR/kr_out.txt"
+run_cmd "kiterunner" "kr scan $DOMAIN -w /root/tools/kiterunner/routes-small.kite -x 5 -j 100 -o $OUTPUT_DIR/kiterunner_out.txt"
 
-# 结果处理
-echo -e "\n\033[32m[+] 合并结果...\033[0m"
-grep -ahE "https?://[^/]*$DOMAIN[^/]*/" $OUTPUT_DIR/*_out.txt 2>/dev/null \
-    | grep -avE "https?://[^/]*\..+$DOMAIN[^/]*/" \
-    | sort -u > "$OUTPUT_DIR/final_urls.txt"
+# 合并结果函数（修复版）
+# 优化的合并结果函数
+#!/bin/bash
 
-echo -e "\n\033[32m[√] 完成! \033[0m"
+# [...] (保留之前的代码直到merge_results函数)
 
+merge_results() {
+    echo -e "\n\033[32m[+] 合并并过滤结果...\033[0m"
+    
+    # 第一步：收集并标准化所有URL
+    cat "$OUTPUT_DIR"/*_out.txt 2>/dev/null | grep -aEo "((https?:)?//)?[^ ]*" | \
+    grep -i "$DOMAIN" | \
+    sed -E '
+        s|^(https?:)?//|https://|;
+        s|^([^/])|https://\1|;
+        s|https://https://|https://|g;
+        s|http://https://|https://|g;
+    ' | \
+    # 关键过滤：只保留主域名和www子域名
+    grep -aE "https?://(www\.)?$DOMAIN([/:]|$)" | \
+    # 清理无效内容
+    sed '
+        /https*:\/\/[^ ]*https*:\/\/.*/d;
+        /^$/d
+    ' | sort -u > "$OUTPUT_DIR/final_urls.txt"
+    
+    # 结果验证
+    if [ -s "$OUTPUT_DIR/final_urls.txt" ]; then
+        echo -e "\033[32m[√] 找到 $(wc -l < "$OUTPUT_DIR/final_urls.txt") 个有效URL\033[0m"
+    else
+        echo -e "\033[31m[×] 未找到有效URL\033[0m"
+        echo -e "\033[33m[调试] 请检查工具原始输出:\033[0m"
+        ls -la "$OUTPUT_DIR"/*_out.txt
+    fi
+}
+
+merge_results
